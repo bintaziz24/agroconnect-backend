@@ -26,6 +26,11 @@ class LivraisonController extends Controller
                     $qp->where('agriculteur_id', $agriculteur->id);
                 })->with('produit');
             }, 'commande.client'])->latest()->get();
+        } elseif ($user->role === 'livreur') {
+            $livraisons = Livraison::where(function ($q) use ($user) {
+                $q->where('livreur_id', $user->id)
+                  ->orWhereNull('livreur_id');
+            })->with(['commande.client', 'commande.lignesCommande.produit.agriculteur.user'])->latest()->get();
         } else {
             // Client
             $livraisons = Livraison::whereHas('commande', function ($q) use ($user) {
@@ -42,18 +47,34 @@ class LivraisonController extends Controller
     public function update(Request $request, string $id)
     {
         $request->validate([
-            'status' => 'required|string|in:en_attente,preparation,expediee,en_cours,livree,annulee',
+            'status'     => 'sometimes|string|in:en_attente,preparation,expediee,en_cours,livree,annulee',
+            'livreur_id' => 'nullable|exists:users,id',
         ]);
 
         $livraison = Livraison::findOrFail($id);
-        $livraison->status = $request->status;
+        $user = $request->user();
+
+        if ($request->has('status')) {
+            $livraison->status = $request->status;
+        }
+
+        if ($request->has('livreur_id')) {
+            $livraison->livreur_id = $request->livreur_id;
+        } elseif ($user && $user->role === 'livreur' && !$livraison->livreur_id) {
+            $livraison->livreur_id = $user->id;
+        }
+
         $livraison->save();
 
         // Synchroniser le statut de la commande
-        $commande = $livraison->commande;
-        $commande->statut = $request->status;
-        $commande->save();
+        if ($request->has('status')) {
+            $commande = $livraison->commande;
+            if ($commande) {
+                $commande->statut = $request->status;
+                $commande->save();
+            }
+        }
 
-        return response()->json($livraison->load('commande'));
+        return response()->json($livraison->load(['commande.client', 'livreur']));
     }
 }

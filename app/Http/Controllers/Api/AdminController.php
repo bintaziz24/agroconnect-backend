@@ -25,34 +25,96 @@ class AdminController extends Controller
      */
     public function statistiques(Request $request)
     {
+        $totalUsers = User::count();
         $totalClients = User::where('role', 'client')->count();
-        $totalAgriculteurs = Agriculteur::count();
+        $totalAgriculteurs = User::where('role', 'agriculteur')->count();
+        $totalLivreurs = User::where('role', 'livreur')->count();
         $totalProduits = Produit::count();
         $totalCommandes = Commande::count();
-        $totalRevenus = Commande::where('statut', '!=', 'annulee')->sum('montant_total');
+        $totalRevenus = floatval(Commande::where('statut', '!=', 'annulee')->sum('montant_total'));
+        $commissions = floatval(round($totalRevenus * 0.05, 2));
+
+        $pendingAgriCount = Agriculteur::where('statut_validation', 'en_attente')->count();
+        $pendingUserCount = User::where('statut_validation', 'en_attente')->count();
+        $validationsEnAttente = max($pendingAgriCount, $pendingUserCount);
 
         return response()->json([
-            'clients'      => $totalClients,
-            'agriculteurs' => $totalAgriculteurs,
-            'produits'     => $totalProduits,
-            'commandes'    => $totalCommandes,
-            'revenus'      => floatval($totalRevenus),
+            'utilisateurs'           => $totalUsers,
+            'clients'                => $totalClients,
+            'agriculteurs'           => $totalAgriculteurs,
+            'livreurs'               => $totalLivreurs,
+            'produits'               => $totalProduits,
+            'commandes'              => $totalCommandes,
+            'revenus'                => $totalRevenus,
+            'commissions'            => $commissions,
+            'validations_en_attente' => $validationsEnAttente,
         ]);
     }
 
     /**
-     * Validate an agricultural producer's profile.
+     * Validate or reject an agricultural producer or delivery driver profile.
      */
     public function validerAgriculteur(Request $request, string $id)
     {
-        $agriculteur = Agriculteur::findOrFail($id);
-        $agriculteur->statut_validation = 'validé';
-        $agriculteur->save();
+        $statut = $request->input('statut', 'validé');
+
+        $user = User::find($id);
+        $agriculteur = Agriculteur::where('id', $id)->orWhere('user_id', $id)->first();
+
+        if (!$user && $agriculteur) {
+            $user = $agriculteur->user;
+        }
+
+        if ($user) {
+            $user->statut_validation = $statut;
+            $user->save();
+        }
+
+        if ($agriculteur) {
+            $agriculteur->statut_validation = $statut;
+            $agriculteur->save();
+        }
 
         return response()->json([
-            'success'      => true,
-            'message'      => 'Profil agriculteur validé avec succès.',
-            'agriculteur'  => $agriculteur->load('user'),
+            'success' => true,
+            'message' => 'Statut utilisateur mis à jour avec succès.',
+            'statut'  => $statut,
         ]);
+    }
+
+    /**
+     * Get all products for product moderation.
+     */
+    public function produits(Request $request)
+    {
+        $produits = Produit::with(['agriculteur.user', 'categorie'])->latest()->get();
+        return response()->json($produits);
+    }
+
+    /**
+     * Moderation action: Delete product listing.
+     */
+    public function supprimerProduit(Request $request, string $id)
+    {
+        $produit = Produit::find($id);
+        if (!$produit) {
+            return response()->json(['message' => 'Produit introuvable.'], 404);
+        }
+
+        $produit->delete();
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Produit supprimé avec succès par la modération admin.'
+        ]);
+    }
+
+    /**
+     * Get recent platform orders for dashboard activities.
+     */
+    public function commandes(Request $request)
+    {
+        $commandes = Commande::with(['client'])->latest()->take(10)->get();
+        return response()->json($commandes);
     }
 }
