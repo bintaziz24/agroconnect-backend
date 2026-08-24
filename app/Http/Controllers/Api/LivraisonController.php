@@ -18,14 +18,18 @@ class LivraisonController extends Controller
         if ($user->role === 'admin') {
             $livraisons = Livraison::with('commande.client')->latest()->get();
         } elseif ($user->role === 'agriculteur') {
-            $agriculteur = $user->agriculteur;
-            $livraisons = Livraison::whereHas('commande.lignesCommande.produit', function ($q) use ($agriculteur) {
-                $q->where('agriculteur_id', $agriculteur->id);
-            })->with(['commande.lignesCommande' => function ($q) use ($agriculteur) {
-                $q->whereHas('produit', function ($qp) use ($agriculteur) {
-                    $qp->where('agriculteur_id', $agriculteur->id);
-                })->with('produit');
-            }, 'commande.client'])->latest()->get();
+            $agriculteur = $user->agriculteur ?? \App\Models\Agriculteur::where('user_id', $user->id)->first();
+            if (!$agriculteur) {
+                $livraisons = collect([]);
+            } else {
+                $livraisons = Livraison::whereHas('commande.lignesCommande.produit', function ($q) use ($agriculteur) {
+                    $q->where('agriculteur_id', $agriculteur->id);
+                })->with(['commande.lignesCommande' => function ($q) use ($agriculteur) {
+                    $q->whereHas('produit', function ($qp) use ($agriculteur) {
+                        $qp->where('agriculteur_id', $agriculteur->id);
+                    })->with('produit');
+                }, 'commande.client'])->latest()->get();
+            }
         } elseif ($user->role === 'livreur') {
             $livraisons = Livraison::where(function ($q) use ($user) {
                 $q->where('livreur_id', $user->id)
@@ -54,6 +58,19 @@ class LivraisonController extends Controller
         $livraison = Livraison::findOrFail($id);
         $user = $request->user();
 
+        if ($request->input('action') === 'refuser' || $request->input('status') === 'refusee') {
+            $livraison->livreur_id = null;
+            $livraison->status = 'en_attente';
+            $livraison->save();
+
+            if ($livraison->commande) {
+                $livraison->commande->statut = 'preparation';
+                $livraison->commande->save();
+            }
+
+            return response()->json($livraison);
+        }
+
         if ($request->has('status')) {
             $livraison->status = $request->status;
         }
@@ -76,5 +93,43 @@ class LivraisonController extends Controller
         }
 
         return response()->json($livraison->load(['commande.client', 'livreur']));
+    }
+
+    /**
+     * Obtenir le profil livreur avec immatriculation et disponibilité
+     */
+    public function profile(Request $request)
+    {
+        $user = $request->user();
+        $livreur = \App\Models\Livreur::firstOrCreate(
+            ['user_id' => $user->id],
+            [
+                'immatriculation_vehicule' => 'DK-8921-AB',
+                'est_valid'                => true,
+                'est_dispo'                => true,
+            ]
+        );
+
+        return response()->json($livreur);
+    }
+
+    /**
+     * Mettre à jour l immatriculation du véhicule ou la disponibilité
+     */
+    public function updateProfile(Request $request)
+    {
+        $user = $request->user();
+        $livreur = \App\Models\Livreur::firstOrCreate(
+            ['user_id' => $user->id],
+            [
+                'immatriculation_vehicule' => 'DK-8921-AB',
+                'est_valid'                => true,
+                'est_dispo'                => true,
+            ]
+        );
+
+        $livreur->update($request->only(['immatriculation_vehicule', 'est_dispo']));
+
+        return response()->json($livreur);
     }
 }
